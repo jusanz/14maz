@@ -1,0 +1,32 @@
+node_modules
+.env
+jupyter/work
+
+/gateway/
+/postgres/
+/jupyter/
+
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+go.work
+
+# Python
+*.pyc
+venv
+
+# Jupyter
+.ipynb_checkpoints
+
+# Remix
+/.cache
+/build
+/public/build
+
+# OSX
+.DS_Store
