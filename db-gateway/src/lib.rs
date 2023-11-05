@@ -1,3 +1,4 @@
+pub mod html_parser;
 pub mod snapshots;
 pub mod urls;
 
