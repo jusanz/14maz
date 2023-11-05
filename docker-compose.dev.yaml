@@ -1,21 +1,6 @@
 version: "3.9"
 
 services:
-  db-gateway:
-    build:
-      context: ./db-gateway
-      dockerfile: Dockerfile
-    depends_on:
-      - redis
-      - postgres
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_HOST: postgres
-      POSTGRES_DB: postgres
-    ports:
-      - 8080:8080
-
   adminer:
     image: adminer:latest
     restart: always
@@ -35,6 +20,8 @@ services:
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - 5432:5432
 
 volumes:
   redis:
