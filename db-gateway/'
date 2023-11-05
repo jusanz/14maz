@@ -1,0 +1,252 @@
+use axum::{
+    extract::{Extension, Json, Query},
+    http::StatusCode,
+    response::IntoResponse,
+    routing::post,
+    Router,
+};
+use serde::{Deserialize, Serialize};
+use sqlx::{Error, PgPool};
+use std::env;
+use std::sync::Arc;
+use tracing::info;
+use tracing_subscriber;
+
+#[derive(Deserialize)]
+struct Payload {
+    url: Option<String>,
+    html: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, sqlx::FromRow)]
+struct Content {
+    url: Option<String>,
+    html: Option<String>,
+}
+
+#[derive(sqlx::FromRow)]
+struct Record {
+    id: String,
+}
+
+#[tokio::main]
+async fn main() {
+    tracing_subscriber::fmt::init();
+
+    let postgres_user = env::var("POSTGRES_USER").unwrap_or_else(|_| "postgres".to_string());
+    let postgres_password =
+        env::var("POSTGRES_PASSWORD").unwrap_or_else(|_| "postgres".to_string());
+    let postgres_host = env::var("POSTGRES_HOST").unwrap_or_else(|_| "localhost".to_string());
+    let postgres_db = env::var("POSTGRES_DB").unwrap_or_else(|_| "postgres".to_string());
+    let postgres_url = format!(
+        "postgres://{}:{}@{}:5432/{}",
+        postgres_user, postgres_password, postgres_host, postgres_db
+    );
+
+    let pool = Arc::new(
+        PgPool::connect(&postgres_url)
+            .await
+            .expect("Failed to create PgPool"),
+    );
+
+    create_snapshots_table(&pool.clone()).await.unwrap();
+    create_urls_table(&pool.clone()).await.unwrap();
+
+    let app = Router::new()
+        .route("/api/insert_url", post(insert_url))
+        .route("/api/insert_snapshot", post(insert_snapshot))
+        .layer(Extension(pool));
+
+    axum::Server::bind(&"0.0.0.0:3000".parse().unwrap())
+        .serve(app.into_make_service())
+        .await
+        .unwrap();
+}
+
+async fn create_snapshots_table(pool: &PgPool) -> Result<(), Error> {
+    sqlx::query(
+        r#"
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE TABLE IF NOT EXISTS snapshots (
+  id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+  url TEXT NOT NULL,
+  content JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+)
+    "#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        r#"
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+  RETURNS TRIGGER AS $$
+  BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+  END;
+  $$ language 'plpgsql';
+
+DROP TRIGGER IF EXISTS update_snapshots_updated_at ON snapshots;
+CREATE TRIGGER update_snapshots_updated_at
+  BEFORE UPDATE ON snapshots
+  FOR EACH ROW
+  EXECUTE FUNCTION update_updated_at_column();
+    "#,
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+async fn create_urls_table(pool: &PgPool) -> Result<(), Error> {
+    sqlx::query(
+        r#"
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE TABLE IF NOT EXISTS urls (
+  id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+  url TEXT NOT NULL UNIQUE,
+  content JSONB,
+  snapshot_id uuid,
+  FOREIGN KEY (snapshot_id) REFERENCES snapshots(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+)
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        r#"
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+  RETURNS TRIGGER AS $$
+  BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+  END;
+  $$ language 'plpgsql';
+
+DROP TRIGGER IF EXISTS update_urls_updated_at ON urls;
+CREATE TRIGGER update_urls_updated_at
+  BEFORE UPDATE ON urls
+  FOR EACH ROW
+  EXECUTE FUNCTION update_updated_at_column();
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+async fn insert_snapshot(
+    Query(payload): Query<Payload>,
+    Extension(pool): Extension<Arc<PgPool>>,
+) -> impl IntoResponse {
+    let url = match payload.url {
+        Some(url) => url,
+        None => return (StatusCode::BAD_REQUEST, "Missing url"),
+    };
+    let html = match payload.html {
+        Some(html) => html,
+        None => return (StatusCode::BAD_REQUEST, "Missing html"),
+    };
+
+    let pool = pool.as_ref();
+
+    let last_snapshot = fetch_last_snapshot(&url, pool).await.unwrap();
+
+    if let Some(last_snapshot) = last_snapshot {
+        if last_snapshot.html == Some(html.to_string()) {
+            info!("No need to insert the same content twice.");
+            return (StatusCode::OK, "No need to insert the same content twice.");
+        }
+    }
+
+    let content = Content {
+        url: Some(url.to_string()),
+        html: Some(html.to_string()),
+    };
+
+    let content_str = serde_json::to_string(&content).unwrap();
+
+    let record = sqlx::query_as::<_, Record>(
+        r#"
+        INSERT INTO snapshots (url, content)
+        VALUES ($1, $2)
+        RETURNING id
+        "#,
+    )
+    .bind(&url)
+    .bind(content_str)
+    .fetch_optional(pool)
+    .await
+    .unwrap();
+
+    match record {
+        Some(record) => {
+            add_relation_to_url(&url, &record.id, pool).await.unwrap();
+            (StatusCode::OK, "Snapshot inserted")
+        }
+        None => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to insert snapshot",
+        ),
+    }
+}
+
+async fn fetch_last_snapshot(url: &str, pool: &PgPool) -> Result<Option<Content>, Error> {
+    let result = sqlx::query_as::<_, Content>(
+        r#"SELECT content FROM snapshots WHERE url = $1 ORDER BY created_at DESC LIMIT 1"#,
+    )
+    .bind(url)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(result)
+}
+
+async fn add_relation_to_url(url: &str, snapshot_id: &str, pool: &PgPool) -> Result<(), Error> {
+    sqlx::query(
+        r#"
+        UPDATE urls
+        SET snapshot_id = $1
+        WHERE url = $2
+        "#,
+    )
+    .bind(snapshot_id)
+    .bind(url)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+async fn insert_url(
+    Query(payload): Query<Payload>,
+    Extension(pool): Extension<Arc<PgPool>>,
+) -> Result<impl IntoResponse, impl IntoResponse> {
+    let url = match payload.url {
+        Some(url) => url,
+        None => return (StatusCode::BAD_REQUEST, "Missing url"),
+    };
+
+    let pool = pool.as_ref();
+
+    sqlx::query(
+        r#"
+        INSERT INTO urls (url)
+        VALUES ($1) ON CONFLICT (url) DO NOTHING
+        "#,
+    )
+    .bind(url)
+    .execute(pool)
+    .await
+    .unwrap();
+
+    (StatusCode::OK, "Url inserted")
+}
