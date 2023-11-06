@@ -143,6 +143,14 @@ pub async fn insert_snapshot(
 
     let pool = pool.as_ref();
 
+    match crate::urls::crawl_url(pool, &url).await {
+        Ok(_) => (),
+        Err(e) => {
+            error!("Failed to crawl url: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to crawl url");
+        }
+    };
+
     let last_snapshot = match fetch_last_snapshot(&url, pool).await {
         Ok(last_snapshot) => last_snapshot,
         Err(e) => {
@@ -300,7 +308,7 @@ pub async fn fetch_url_to_snapshot(Extension(pool): Extension<Arc<PgPool>>) -> i
 
     let sql = r#"
         SELECT * FROM urls
-        ORDER BY updated_at ASC
+        ORDER BY (content->>'timestamp') NULLS FIRST
         LIMIT 1
         "#;
 
