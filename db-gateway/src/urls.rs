@@ -17,7 +17,20 @@ pub struct Payload {
 #[derive(Serialize, Deserialize)]
 struct Content {
     url: Option<String>,
-    html: Option<String>,
+    crawled_at: Option<u64>,
+}
+
+impl Content {
+    fn from_url(url: &str) -> Self {
+        Self {
+            url: Some(url.to_string()),
+            crawled_at: None,
+        }
+    }
+
+    fn set_timestamp(&mut self) {
+        self.crawled_at = Some(chrono::Utc::now().timestamp_millis() as u64);
+    }
 }
 
 #[derive(sqlx::FromRow)]
@@ -109,15 +122,19 @@ pub async fn insert_url(
         return (StatusCode::BAD_REQUEST, "only absolute urls are allowed");
     }
 
+    let mut content = Content::from_url(&url);
+    content.set_timestamp();
+
     let pool = pool.as_ref();
 
     match sqlx::query(
         r#"
-        INSERT INTO urls (url)
-        VALUES ($1) ON CONFLICT (url) DO NOTHING
+        INSERT INTO urls (url, content)
+        VALUES ($1, $2) ON CONFLICT (url) DO NOTHING
         "#,
     )
     .bind(url)
+    .bind(serde_json::to_value(content).unwrap())
     .execute(pool)
     .await
     {
@@ -132,6 +149,26 @@ pub async fn insert_url(
             error!("Failed to insert url: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, "Failed to insert url")
         }
+    }
+}
+
+pub async fn crawl_url(pool: &PgPool, url: &str) -> Result<(), Error> {
+    let mut content = Content::from_url(&url);
+    content.set_timestamp();
+
+    let sql = r#"
+        UPDATE urls
+        SET content = $1
+        WHERE url = $2
+    "#;
+    match sqlx::query(sql)
+        .bind(serde_json::to_value(content).unwrap())
+        .bind(url)
+        .execute(pool)
+        .await
+    {
+        Ok(_) => Ok(()),
+        Err(e) => Err(e),
     }
 }
 
