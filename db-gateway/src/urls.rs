@@ -122,8 +122,7 @@ pub async fn insert_url(
         return (StatusCode::BAD_REQUEST, "only absolute urls are allowed");
     }
 
-    let mut content = Content::from_url(&url);
-    content.set_timestamp();
+    let content = Content::from_url(&url);
 
     let pool = pool.as_ref();
 

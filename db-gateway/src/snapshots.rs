@@ -274,13 +274,14 @@ async fn add_relation_to_url(url: &str, snapshot_id: &Uuid, pool: &PgPool) -> Re
 }
 
 pub async fn fetch_url_to_snapshot(Extension(pool): Extension<Arc<PgPool>>) -> impl IntoResponse {
+    let pool = pool.as_ref();
+
     let sql = r#"
         SELECT * FROM urls
         WHERE snapshot_id IS NULL
         ORDER BY updated_at ASC
         LIMIT 1
         "#;
-    let pool = pool.as_ref();
 
     let result = match sqlx::query_as::<_, crate::urls::Record>(sql)
         .fetch_optional(pool)
@@ -308,7 +309,7 @@ pub async fn fetch_url_to_snapshot(Extension(pool): Extension<Arc<PgPool>>) -> i
 
     let sql = r#"
         SELECT * FROM urls
-        ORDER BY (content->>'timestamp') NULLS FIRST
+        ORDER BY (content->>'crawled_at') NULLS FIRST
         LIMIT 1
         "#;
 
