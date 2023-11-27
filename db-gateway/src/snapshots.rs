@@ -34,21 +34,6 @@ struct ResponseBody {
 }
 
 pub async fn create_snapshots_table(pool: &PgPool) -> Result<(), Error> {
-    // CREATE EXTENSION and TABLE commands are separated.
-    match sqlx::query(
-        r#"
-        CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-        "#,
-    )
-    .execute(pool)
-    .await
-    {
-        Ok(_) => (),
-        Err(e) => {
-            error!("Failed to create extension: {}", e);
-        }
-    }
-
     match sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS snapshots (
@@ -69,30 +54,9 @@ pub async fn create_snapshots_table(pool: &PgPool) -> Result<(), Error> {
         }
     }
 
-    // Each part of function and trigger creation is a separate command.
     match sqlx::query(
         r#"
-        CREATE OR REPLACE FUNCTION update_updated_at_column()
-          RETURNS TRIGGER AS $$
-          BEGIN
-            NEW.updated_at = NOW();
-            RETURN NEW;
-          END;
-          $$ language 'plpgsql';
-        "#,
-    )
-    .execute(pool)
-    .await
-    {
-        Ok(_) => (),
-        Err(e) => {
-            error!("Failed to create function: {}", e);
-        }
-    }
-
-    match sqlx::query(
-        r#"
-        DROP TRIGGER IF EXISTS update_snapshots_updated_at ON snapshots;
+        DROP TRIGGER IF EXISTS updated_at ON snapshots;
         "#,
     )
     .execute(pool)
@@ -106,10 +70,10 @@ pub async fn create_snapshots_table(pool: &PgPool) -> Result<(), Error> {
 
     match sqlx::query(
         r#"
-        CREATE TRIGGER update_snapshots_updated_at
+        CREATE TRIGGER updated_at
           BEFORE UPDATE ON snapshots
           FOR EACH ROW
-          EXECUTE FUNCTION update_updated_at_column();
+          EXECUTE FUNCTION updated_at();
         "#,
     )
     .execute(pool)

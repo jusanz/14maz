@@ -28,10 +28,22 @@ async fn main() {
             .expect("Failed to create PgPool"),
     );
 
+    db_gateway::utils::db::create_extensions(&pool.clone())
+        .await
+        .unwrap();
+
+    db_gateway::utils::db::create_functions(&pool.clone())
+        .await
+        .unwrap();
+
     db_gateway::snapshots::create_snapshots_table(&pool.clone())
         .await
         .unwrap();
     db_gateway::urls::create_urls_table(&pool.clone())
+        .await
+        .unwrap();
+
+    db_gateway::embeddings::db::create_embeddings_table(&pool.clone())
         .await
         .unwrap();
 

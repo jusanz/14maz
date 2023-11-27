@@ -47,15 +47,6 @@ impl Record {
 }
 
 pub async fn create_urls_table(pool: &PgPool) -> Result<(), Error> {
-    // CREATE EXTENSION and TABLE commands are separated.
-    sqlx::query(
-        r#"
-        CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-        "#,
-    )
-    .execute(pool)
-    .await?;
-
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS urls (
@@ -72,16 +63,9 @@ pub async fn create_urls_table(pool: &PgPool) -> Result<(), Error> {
     .execute(pool)
     .await?;
 
-    // Each part of function and trigger creation is a separate command.
     sqlx::query(
         r#"
-        CREATE OR REPLACE FUNCTION update_updated_at_column()
-          RETURNS TRIGGER AS $$
-          BEGIN
-            NEW.updated_at = NOW();
-            RETURN NEW;
-          END;
-          $$ language 'plpgsql';
+        DROP TRIGGER IF EXISTS updated_at ON urls;
         "#,
     )
     .execute(pool)
@@ -89,18 +73,10 @@ pub async fn create_urls_table(pool: &PgPool) -> Result<(), Error> {
 
     sqlx::query(
         r#"
-        DROP TRIGGER IF EXISTS update_urls_updated_at ON urls;
-        "#,
-    )
-    .execute(pool)
-    .await?;
-
-    sqlx::query(
-        r#"
-        CREATE TRIGGER update_urls_updated_at
+        CREATE TRIGGER updated_at
           BEFORE UPDATE ON urls
           FOR EACH ROW
-          EXECUTE FUNCTION update_updated_at_column();
+          EXECUTE FUNCTION updated_at();
         "#,
     )
     .execute(pool)

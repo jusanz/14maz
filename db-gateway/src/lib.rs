@@ -1,5 +1,7 @@
+pub mod embeddings;
 pub mod snapshots;
 pub mod urls;
+pub mod utils;
 
 use sqlx::{Error, PgPool, Row};
 use tracing::debug;
